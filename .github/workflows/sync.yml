@@ -1,0 +1,88 @@
+name: Poll Upstream Changes
+on:
+  schedule:
+    - cron: '0 * * * *'  # 每分钟检查一次
+  workflow_dispatch:     # 支持手动触发
+
+permissions:
+  actions: write  # 修改 workflows
+  checks: write   # 修改 checks（如测试状态）
+  contents: write  # 提交代码
+  discussions: write  # GitHub Discussions
+  issues: write  # Issues
+  packages: write  # Packages
+  pull-requests: write  # PRs
+  statuses: write  # Commit statuses
+
+jobs:
+  poll-and-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch Upstream
+        run: |
+          git remote add upstream https://github.com/MohistMC/Youer.git
+          git fetch upstream
+    
+      - name: Check for New Commits
+        id: check-changes
+        run: |
+          if [ $(git rev-list --count HEAD..upstream/1.21.1) -gt 0 ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "true"
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "false"
+          fi
+      - name: Sync Upstream Changes
+        if: steps.check-changes.outputs.changed == 'true'
+        run: |
+          git config --global user.email "actions@github.com"
+          git config --global user.name "GitHub Actions"
+          git checkout -B 1.21.1 upstream/1.21.1
+          git checkout origin/1.21.1 -- .github/workflows/sync.yml
+          git add .github/workflows/sync.yml
+          git commit -m "保留本地配置文件 .github/workflows/sync.yml"
+          git restore .github/workflows/gradle.yml
+          git push origin --force-with-lease 1.21.1
+      - name: Debug Hash Status
+        run: |
+          echo "Current Hash: ${{ steps.check-changes.outputs.changed }}"
+          echo "Should Skip: ${{ steps.check-changes.outputs.changed != 'true' }}"
+          
+      - name: Set up JDK 21
+        if: steps.check-changes.outputs.changed == 'true'
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        if: steps.check-changes.outputs.changed == 'true'
+        run: |
+          chmod +x ./gradlew
+          ./gradlew setup
+  
+      - name: Build with Gradle Wrapper
+        if: steps.check-changes.outputs.changed == 'true'
+        run: ./gradlew youerJar
+
+      - name: Rename JAR
+        if: steps.check-changes.outputs.changed == 'true'
+        run: mv projects/youer/build/libs/*-server.jar projects/youer/build/libs/Youer.jar
+
+      - name: Create Release
+        if: steps.check-changes.outputs.changed == 'true'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: projects/youer/build/libs/Youer.jar
+          name: Youer-1.21.1
+          tag_name: lastest
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 自动使用内置 Toke
